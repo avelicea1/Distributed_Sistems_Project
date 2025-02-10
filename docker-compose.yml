@@ -1,0 +1,174 @@
+services:
+  traefik:
+    image: traefik:v2.2
+    restart: always
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.tlsChallenge=true"
+      - "--log.level=DEBUG"
+    ports:
+      - "80:80"      # HTTP
+      - "443:443"    # HTTPS
+      - "8080:8080"  # Traefik Dashboard
+    depends_on:
+      - person-backend-container
+      - device-backend-container
+      - frontend-container
+      - monitoring-backend-container
+      - postgres-container
+      - rabbitmq
+      - chat-backend-container
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - TZ=Europe/Berlin
+    labels:
+      - "traefik.enable=true"
+    networks:
+      - myNetwork
+
+  person-backend-container:
+    image: person-backend
+    # ports:
+    #   - "8083:8083"
+    environment:
+      DB_IP: postgres-container
+      DB_PORT: 5432
+      DB_DBNAME: city-db
+      DB_USER: postgres
+      DB_PASSWORD: root
+      DEVICE_SERVICE_URL: "http://device-backend-container:8081/api-device"
+      JWT_SECRET_KEY: your_jwt_secret_key
+    deploy:
+      replicas: 3
+    depends_on:
+      - postgres-container
+      - device-backend-container
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.person-backend.rule=Host(`localhost`) && PathPrefix(`/api-user`)"
+      - "traefik.http.services.person-backend.loadbalancer.server.port=8083"
+      - "traefik.http.routers.person-backend.entrypoints=web"
+    networks:
+      - myNetwork
+
+  device-backend-container:
+    image: device-backend
+    # ports:
+    #   - "8081:8081"
+    environment:
+      DB_IP: postgres-container
+      DB_PORT: 5432
+      DB_DBNAME: devices-db
+      DB_USER: postgres
+      DB_PASSWORD: root
+      RABBIT_HOST: rabbitmq
+    deploy:
+      replicas: 3
+    depends_on:
+      - postgres-container
+      - rabbitmq
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.device-backend.rule=Host(`localhost`) && PathPrefix(`/api-device`)"
+      - "traefik.http.services.device-backend.loadbalancer.server.port=8081"
+      - "traefik.http.routers.device-backend.entrypoints=web"
+    networks:
+      - myNetwork
+
+  frontend-container:
+    image: frontend
+    ports:
+      - "3000:3000"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(`localhost`) && PathPrefix(`/`)"
+      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+      - "traefik.http.routers.frontend.entrypoints=web"
+    networks:
+      - myNetwork
+
+  monitoring-backend-container:
+    image: monitoring-backend
+    # ports:
+    #   - "8082:8082"
+    environment:
+      DB_IP: postgres-container
+      DB_PORT: 5432
+      DB_DBNAME: monitoring-db
+      DB_USER: postgres
+      DB_PASSWORD: root
+      RABBIT_HOST: rabbitmq
+    deploy:
+      replicas: 1
+    depends_on:
+      - postgres-container
+      - rabbitmq
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.monitoring-backend.rule=Host(`localhost`) && PathPrefix(`/api-monitor`)"
+      - "traefik.http.services.monitoring-backend.loadbalancer.server.port=8082"
+      - "traefik.http.routers.monitoring-backend.entrypoints=web"
+    networks:
+      - myNetwork
+  
+  chat-backend-container:
+    image: chat-backend
+    # ports:
+    #   - "8082:8082"
+    environment:
+      DB_IP: postgres-container
+      DB_PORT: 5432
+      DB_DBNAME: chat-db
+      DB_USER: postgres
+      DB_PASSWORD: root
+    deploy:
+      replicas: 1
+    depends_on:
+      - postgres-container
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.chat-backend.rule=Host(`localhost`) && PathPrefix(`/api-chat`)"
+      - "traefik.http.services.chat-backend.loadbalancer.server.port=8084"
+      - "traefik.http.routers.chat-backend.entrypoints=web"
+    networks:
+      - myNetwork
+
+  postgres-container:
+    image: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: root
+      POSTGRES_MAX_CONNECTIONS: 200
+    volumes:
+      - "./postgres_data:/var/lib/postgresql/data"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - myNetwork
+
+  rabbitmq:
+    image: rabbitmq:management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_MAX_CONNECTIONS: 1000
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.rabbitmq.rule=Host(`localhost`) && PathPrefix(`/rabbitmq`)"
+      - "traefik.http.services.rabbitmq.loadbalancer.server.port=15672"
+    networks:
+      - myNetwork
+
+networks:
+  myNetwork:
+    driver: bridge
